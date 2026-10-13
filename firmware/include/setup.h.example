@@ -1,0 +1,28 @@
+// User settings for the EEPROM dumper. Copy this file to setup.h and edit it before flashing.
+// setup.h is ignored by git, so your Wi-Fi password stays on your PC.
+
+// ---- Own Wi-Fi, opened only when the home Wi-Fi cannot be joined ----
+// Join it with your phone and open http://192.168.4.1
+#define AP_SSID "Daikin-EEPROM-Dump"
+#define AP_PASSWORD "altherma1" // at least 8 characters
+
+// ---- Home Wi-Fi ----
+// Leave WIFI_SSID empty to use the Wi-Fi already saved on the ESP.
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+
+// Name on the home network: http://daikin-dump.local
+#define HOSTNAME "daikin-dump"
+
+// Optional: protects OTA and the /update page (user name: admin)
+// #define OTA_PASSWORD "change-me"
+
+// ---- Pins connected to X41A ----
+#ifdef ARDUINO_ARCH_ESP8266
+// The RX/TX pins. Unplug X41A while flashing over USB, they share these pins.
+#define DAIKIN_RX_PIN 3 // RX pin, from Daikin TX
+#define DAIKIN_TX_PIN 1 // TX pin, to Daikin RX
+#else
+#define DAIKIN_RX_PIN 16 // GPIO16, from Daikin TX
+#define DAIKIN_TX_PIN 17 // GPIO17, to Daikin RX
+#endif
