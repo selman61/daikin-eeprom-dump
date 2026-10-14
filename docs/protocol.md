@@ -21,6 +21,7 @@ This repo uses two read-only commands:
 | Cmd | Meaning | Request | Reply | When |
 | --- | --- | --- | --- | --- |
 | `0x49` | EEPROM read, 1 byte | `04 49 lo hi crc` | `49 dd crc` | Probe, Dump |
+| `0x56` | software ID, 2 bytes (e.g. `91 00` = `ID0091`) | `02 56 crc` | `56 lo hi crc` | only if the option is ticked |
 | `0x52` | RAM read, 16 bytes at the fixed address 0x0680 (firmware ID, e.g. `DP0009_003`) | `04 52 80 06 crc` | `52 d0..d15 crc` | only if the option is ticked |
 
 The RAM read always uses that one address: reading the controller's register areas

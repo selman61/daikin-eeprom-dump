@@ -21,7 +21,8 @@ healthy unit and restore only the bytes that differ. The broken image is in
   not been tried on any other model or board.
 - **Read-only.** The firmware in this repo sends `04 49 lo hi crc`, a 1-byte EEPROM read.
   Optionally, if you tick it on the page, it also
-  reads the board's firmware version once (16 bytes of RAM at the fixed address 0x0680).
+  reads the board's firmware version once (the 2-byte software ID, e.g. `ID0091`, and 16 bytes of
+  RAM at the fixed address 0x0680, e.g. `DP0009_003`).
   There is no code path that writes.
 - **Never send other commands to X41A.** Several of them erase or overwrite the controller's
   memory; `02 43 BA` alone resets the EEPROM. Do not "scan" unknown command bytes on a live unit.
@@ -69,6 +70,9 @@ The line is 5 V TTL, 9600 baud, 8 data bits, even parity, 1 stop bit. Always con
 6. When it says "Dump complete, all 512 pairs valid", press **Download .tsv**. The file is named
    after the EEPROM spec number (e.g. `eeprom_AS1704396-01.tsv`) and, if you ticked the option,
    the firmware version (`eeprom_AS1704396-01_DP0009_003.tsv`).
+   Some boards (e.g. the indoor compressor PCB A4P of the EKHBRD, which also has an X41A) answer
+   with plain bytes for 0x000–0x1FF only, without complement pairs. The page then says "this board
+   returns plain bytes" and the file holds those 512 bytes; that is a complete dump for such a board.
 
 Nothing is sent to the unit until you press Probe or Dump.
 
@@ -84,7 +88,8 @@ Power the unit off before you remove any wires.
 ### Check the result
 
 `python tools/decode.py eeprom_dump.tsv` must report "All 512 (value, ~value) pairs are
-valid". If it does not, run the dump again.
+valid". If it does not, run the dump again. (Plain-byte boards, see step 6, have no pairs; for
+those the file is fine as long as the page reported "Dump complete".)
 
 ## Sharing your dump
 

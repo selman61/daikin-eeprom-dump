@@ -58,6 +58,8 @@ static uint8_t image[EEPROM_SIZE];
 static bool valid[EEPROM_SIZE];
 static uint16_t pos = 0;
 static int okCount = 0, failCount = 0, badPairs = 0;
+static bool plainBoard = false; // 512 plain bytes, no complement pairs (indoor A4P style)
+static String swId;             // 2-byte software ID from the 'V' command, e.g. "ID0091"
 static bool downloaded = false;
 static bool wantFirmwareId = false;
 static String firmwareId; // empty: not read, or the board did not answer
@@ -171,6 +173,43 @@ static bool readWithRetry(uint16_t addr, uint8_t *value)
   return false;
 }
 
+// Optional: the 2-byte software ID ('V', 0x56: "02 56 crc" -> "56 lo hi crc"). Returns e.g. "ID0091",
+// or "" when the board does not answer. Boards whose RAM holds no version text (e.g. the indoor
+// A4P) are identified by this ID only.
+static String readSwId()
+{
+  uint8_t frame[3] = {0x02, 0x56, 0};
+  frame[2] = crc(frame, 2);
+  for (int attempt = 0; attempt < RETRIES; attempt++)
+  {
+    while (Daikin.available())
+      Daikin.read();
+    Daikin.write(frame, sizeof(frame));
+
+    uint8_t reply[4];
+    int len = 0;
+    uint32_t start = millis();
+    while (len < 4 && millis() - start < REPLY_TIMEOUT_MS)
+    {
+      if (Daikin.available())
+      {
+        reply[len++] = Daikin.read();
+        if (len == 2 && reply[0] == 0x15 && reply[1] == 0xEA)
+          return "";
+      }
+      yield();
+    }
+    if (len == 4 && reply[0] == 0x56 && crc(reply, 3) == reply[3])
+    {
+      char text[8];
+      snprintf(text, sizeof(text), "ID%02X%02X", reply[2], reply[1]);
+      return text;
+    }
+    delay(300);
+  }
+  return "";
+}
+
 // Optional: the 16-byte RAM read at the fixed address 0x0680 (see the top of this file). Returns
 // the firmware ID, e.g. "DP0009_003", or "" when the board does not answer or holds no ID there.
 static String readFirmwareId()
@@ -240,18 +279,42 @@ static void step()
         return;
       }
     }
+    // A plain-byte board (512 bytes, see below) refuses every address from 0x200 on. Once the
+    // first 8 reads above 0x1FF have all been refused, skip the rest instead of retrying each one.
+    bool skipRest = pos >= 0x207 && valid[0x1FF];
+    for (uint16_t a = 0x200; skipRest && a <= pos; a++)
+      if (valid[a])
+        skipRest = false;
+    if (skipRest)
+    {
+      failCount += EEPROM_SIZE - 1 - pos;
+      pos = EEPROM_SIZE - 1;
+    }
     if (++pos >= EEPROM_SIZE)
     {
       badPairs = 0;
       for (uint16_t a = 0; a < EEPROM_SIZE; a += 2)
         if (!valid[a] || !valid[a + 1] || (image[a] ^ image[a + 1]) != 0xFF)
           badPairs++;
-      message = badPairs == 0 ? "Dump complete, all 512 pairs valid. Download the file."
-                              : "Dump finished with " + String(badPairs) + " bad pairs. Run Dump again.";
+      // Boards like the indoor A4P return plain bytes for 0x000-0x1FF and NAK everything above:
+      // no (value, ~value) pairs, so the pair check does not apply.
+      plainBoard = true;
+      for (uint16_t a = 0; a < EEPROM_SIZE; a++)
+        if (valid[a] != (a < 0x200))
+          plainBoard = false;
+      if (plainBoard)
+        message = "Dump complete: this board returns plain bytes for 0x000-0x1FF (no pairs). Download the file.";
+      else
+        message = badPairs == 0 ? "Dump complete, all 512 pairs valid. Download the file."
+                                : "Dump finished with " + String(badPairs) + " bad pairs. Run Dump again.";
       if (wantFirmwareId)
       {
+        swId = readSwId();
         firmwareId = readFirmwareId();
-        message += firmwareId.length() ? " Firmware: " + firmwareId + "." : String(" Firmware ID could not be read.");
+        String ids = firmwareId;
+        if (swId.length())
+          ids += (ids.length() ? " / " : "") + swId;
+        message += ids.length() ? " Firmware: " + ids + "." : String(" Firmware ID could not be read.");
       }
       downloaded = false;
       state = DONE;
@@ -280,7 +343,7 @@ button:disabled{background:#999}
 <button id="probe" onclick="post('/probe')">Probe</button>
 <button id="dump" onclick="post('/dump?fw='+($('fw').checked?1:0))">Dump (a few minutes)</button>
 <p class="small"><label><input type="checkbox" id="fw"> After the dump, also read the board's firmware
-version (one extra read-only command: 16 bytes of RAM at 0x0680)</label></p>
+version (two extra read-only commands: the 2-byte software ID and 16 bytes of RAM at 0x0680)</label></p>
 <p><a id="dl" href="/dump.tsv" style="display:none"><button>Download .tsv</button></a></p>
 <p id="dev" class="small"></p>
 <p class="small">Done? Go back to your previous firmware: <a href="/update">upload its .bin</a>, or use OTA.</p>
@@ -332,8 +395,10 @@ static void handleDump()
     memset(valid, 0, sizeof(valid));
     pos = 0;
     okCount = failCount = badPairs = 0;
+    plainBoard = false;
     wantFirmwareId = server.arg("fw") == "1";
     firmwareId = "";
+    swId = "";
     state = DUMPING;
     message = "Dumping... keep this page open or come back later.";
   }
@@ -366,10 +431,14 @@ static void handleFile()
     server.send(404, "text/plain", "No dump yet.");
     return;
   }
-  String as = asNumber();
+  String as = plainBoard ? String("") : asNumber();
   String fw = firmwareId.length() ? firmwareId : String(wantFirmwareId ? "unknown (no reply)" : "not read");
+  String sw = swId.length() ? swId : String(wantFirmwareId ? "unknown (no reply)" : "not read");
   String out = "# model/board: fill in\n# EEPROM spec: " + (as.length() ? as : String("unknown")) +
-               "\n# Firmware: " + fw + "\n# Read with 0x49 over X41A (web dumper). Bad pairs: " + String(badPairs) +
+               "\n# Firmware: " + fw + "\n# SW ID (0x56): " + sw +
+               "\n# Read with 0x49 over X41A (web dumper). " +
+               (plainBoard ? String("Plain bytes, 0x000-0x1FF (no complement pairs).")
+                           : "Bad pairs: " + String(badPairs)) +
                "\n# Columns: physical address, value (hex).\n";
   char line[12];
   for (uint16_t a = 0; a < EEPROM_SIZE; a++)
@@ -384,6 +453,8 @@ static void handleFile()
     name += "_" + as;
   if (firmwareId.length())
     name += "_" + firmwareId;
+  else if (swId.length())
+    name += "_" + swId;
   name += name == "eeprom" ? "_dump.tsv" : ".tsv";
   server.sendHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
   server.send(200, "text/tab-separated-values", out);
